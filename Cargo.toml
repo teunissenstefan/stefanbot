@@ -1,0 +1,13 @@
+[package]
+name = "stefanbot"
+version = "0.1.0"
+authors = ["Stefan Teunissen <stefanteunissen1@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serenity = "0.10"
+tokio = { version = "1.6.1", features = ['bytes', 'fs', 'io-util', 'libc', 'macros', 'memchr', 'net', 'num_cpus', 'rt', 'rt-multi-thread', 'sync', 'time', 'tokio-macros'] }
+dotenv = "0.15.0"
+songbird = "0.1.6"
