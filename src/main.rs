@@ -6,7 +6,10 @@
 //! git = "https://github.com/serenity-rs/serenity.git"
 //! features = ["client", standard_framework", "voice"]
 //! ```
+// mod song;
+
 use std::env;
+
 extern crate dotenv;
 
 use dotenv::dotenv;
@@ -33,6 +36,8 @@ use serenity::{
 };
 use songbird::input::Input;
 use serenity::static_assertions::_core::borrow::BorrowMut;
+use std::fs::File;
+use std::io::{Write, BufReader, BufRead};
 
 struct Handler;
 
@@ -44,7 +49,7 @@ impl EventHandler for Handler {
 }
 
 #[group]
-#[commands(deafen, join, leave, mute, play, ping, undeafen, unmute)]
+#[commands(deafen, join, leave, mute, play, ping, undeafen, unmute, stop, queue, save, load)]
 struct General;
 
 #[tokio::main]
@@ -84,7 +89,7 @@ async fn deafen(ctx: &Context, msg: &Message) -> CommandResult {
             check_msg(msg.reply(ctx, "Not in a voice channel 🥺").await);
 
             return Ok(());
-        },
+        }
     };
 
     let mut handler = handler_lock.lock().await;
@@ -167,7 +172,7 @@ async fn mute(ctx: &Context, msg: &Message) -> CommandResult {
             check_msg(msg.reply(ctx, "Not in a voice channel 🥺").await);
 
             return Ok(());
-        },
+        }
     };
 
     let mut handler = handler_lock.lock().await;
@@ -201,7 +206,7 @@ async fn play(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
             check_msg(msg.channel_id.say(&ctx.http, "Must provide a URL to a video or audio").await);
 
             return Ok(());
-        },
+        }
     };
 
     if !url.starts_with("http") {
@@ -227,12 +232,13 @@ async fn play(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
                 check_msg(msg.channel_id.say(&ctx.http, "Error sourcing ffmpeg").await);
 
                 return Ok(());
-            },
+            }
         };
         let msg_title: &str;
         {
             let mut sd = source.borrow_mut();
             // msg_title = sd.metadata.title.as_deref().unwrap_or("song");
+            //@TODO get song name when Songbird gets updated to next version
             msg_title = "song";
         }
 
@@ -240,6 +246,26 @@ async fn play(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
         handler.play_source(source);
     } else {
         check_msg(msg.channel_id.say(&ctx.http, "Not in a voice channel to play in 🥺").await);
+    }
+
+    Ok(())
+}
+
+#[command]
+#[only_in(guilds)]
+async fn stop(ctx: &Context, msg: &Message) -> CommandResult {
+    let guild = msg.guild(&ctx.cache).await.unwrap();
+    let guild_id = guild.id;
+
+    let manager = songbird::get(ctx).await
+        .expect("Songbird Voice client placed in at initialisation.").clone();
+
+    if let Some(handler_lock) = manager.get(guild_id) {
+        let mut handler = handler_lock.lock().await;
+
+        handler.stop();
+    } else {
+        check_msg(msg.channel_id.say(&ctx.http, "Not in a voice channel 🥺").await);
     }
 
     Ok(())
@@ -291,9 +317,109 @@ async fn unmute(ctx: &Context, msg: &Message) -> CommandResult {
     Ok(())
 }
 
-/// Checks that a message successfully sent; if not, then logs why to stdout.
+struct Song {
+    url: String,
+    title: String,
+}
+
+#[command]
+#[only_in(guilds)]
+async fn queue(context: &Context, msg: &Message) -> CommandResult {
+    let mut vec: Vec<Song> = load_current_queue().unwrap();
+    let mut str: String = "".to_string();
+    let mut i: i32 = 1;
+    for x in &vec {
+
+        str.push_str(&i.to_string());
+        str.push_str(" ");
+        str.push_str(&x.title);
+        str.push_str("\n");
+        i+=1;
+    }
+    check_msg(msg.channel_id.say(&context.http, "Queue: \n".to_string() + &str).await);
+
+    Ok(())
+}
+
+#[command]
+#[only_in(guilds)]
+async fn save(context: &Context, msg: &Message) -> CommandResult {
+    let mut vec: Vec<Song> = load_current_queue().unwrap();
+    save_saved_queue(vec);
+    check_msg(msg.channel_id.say(&context.http, "Queue saved".to_string()).await);
+
+    Ok(())
+}
+
+#[command]
+#[only_in(guilds)]
+async fn load(context: &Context, msg: &Message) -> CommandResult {
+    let mut vec: Vec<Song> = load_saved_queue().unwrap();
+    save_current_queue(vec);
+    check_msg(msg.channel_id.say(&context.http, "Queue loaded".to_string()).await);
+
+    Ok(())
+}
+
+fn save_saved_queue(vec: Vec<Song>) -> std::io::Result<()> {
+    let mut write_string: String = "".to_string();
+    for x in &vec {
+        write_string.push_str(&x.url);
+        write_string.push_str("_");
+        write_string.push_str(&x.title);
+        write_string.push_str("\n");
+    }
+    let mut file = File::create("saved_queue")?;
+    file.write_all(write_string.as_bytes())?;
+    Ok(())
+}
+
+fn save_current_queue(vec: Vec<Song>) -> std::io::Result<()> {
+    let mut write_string: String = "".to_string();
+    for x in &vec {
+        write_string.push_str(&x.url);
+        write_string.push_str("_");
+        write_string.push_str(&x.title);
+        write_string.push_str("\n");
+    }
+    let mut file = File::create("current_queue")?;
+    file.write_all(write_string.as_bytes())?;
+    Ok(())
+}
+
+fn load_current_queue() -> std::io::Result<(Vec<Song>)>  {
+    let mut vec: Vec<Song> = Vec::new();
+    let file = File::open("current_queue")?;
+    let reader = BufReader::new(file);
+
+    for line in reader.lines() {
+        let (url, title) = split_once(line.unwrap());
+        vec.push(Song { url, title });
+    }
+    Ok(vec)
+}
+
+fn load_saved_queue() -> std::io::Result<(Vec<Song>)> {
+    let mut vec: Vec<Song> = Vec::new();
+    let file = File::open("saved_queue")?;
+    let reader = BufReader::new(file);
+
+    for line in reader.lines() {
+        let (url, title) = split_once(line.unwrap());
+        vec.push(Song { url, title });
+    }
+    Ok(vec)
+}
+
 fn check_msg(result: SerenityResult<Message>) {
     if let Err(why) = result {
         println!("Error sending message: {:?}", why);
     }
+}
+
+fn split_once(in_string: String) -> (String, String) {
+    let mut splitter = in_string.splitn(2, '_');
+    let first = splitter.next().unwrap();
+    let second = splitter.next().unwrap();
+    (first.parse().unwrap(), second.parse().unwrap())
 }
