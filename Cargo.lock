@@ -1413,6 +1413,7 @@ name = "stefanbot"
 version = "0.1.0"
 dependencies = [
  "dotenv",
+ "regex",
  "serenity",
  "songbird",
  "tokio",

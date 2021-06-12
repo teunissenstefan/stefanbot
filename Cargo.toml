@@ -10,4 +10,5 @@ edition = "2018"
 serenity = "0.10"
 tokio = { version = "1.6.1", features = ['bytes', 'fs', 'io-util', 'libc', 'macros', 'memchr', 'net', 'num_cpus', 'rt', 'rt-multi-thread', 'sync', 'time', 'tokio-macros'] }
 dotenv = "0.15.0"
-songbird = "0.1.6"
+songbird = { version = "0.1.6", features = ['builtin-queue']}
+regex = "1"

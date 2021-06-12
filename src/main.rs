@@ -1,24 +1,9 @@
-//! Requires the "client", "standard_framework", and "voice" features be enabled in your
-//! Cargo.toml, like so:
-//!
-//! ```toml
-//! [dependencies.serenity]
-//! git = "https://github.com/serenity-rs/serenity.git"
-//! features = ["client", standard_framework", "voice"]
-//! ```
-// mod song;
-
 use std::env;
 
 extern crate dotenv;
 
 use dotenv::dotenv;
-// This trait adds the `register_songbird` and `register_songbird_with` methods
-// to the client builder below, making it easy to install this voice client.
-// The voice client can be retrieved in any command using `songbird::get(ctx).await`.
 use songbird::SerenityInit;
-
-// Import the `Context` to handle commands.
 use serenity::client::Context;
 
 use serenity::{
@@ -38,6 +23,8 @@ use songbird::input::Input;
 use serenity::static_assertions::_core::borrow::BorrowMut;
 use std::fs::File;
 use std::io::{Write, BufReader, BufRead};
+use songbird::tracks::{TrackQueue, TrackHandle};
+use regex::Regex;
 
 struct Handler;
 
@@ -49,13 +36,12 @@ impl EventHandler for Handler {
 }
 
 #[group]
-#[commands(deafen, join, leave, mute, play, ping, undeafen, unmute, stop, queue, save, load)]
+#[commands(join, leave, play, ping, queue, save, load)]
 struct General;
 
 #[tokio::main]
 async fn main() {
     dotenv().ok();
-    // Configure the client with your Discord bot token in the environment.
     let token = env::var("DISCORD_TOKEN")
         .expect("Expected a token in the environment");
 
@@ -72,39 +58,6 @@ async fn main() {
         .expect("Err creating client");
 
     let _ = client.start().await.map_err(|why| println!("Client ended: {:?}", why));
-}
-
-#[command]
-#[only_in(guilds)]
-async fn deafen(ctx: &Context, msg: &Message) -> CommandResult {
-    let guild = msg.guild(&ctx.cache).await.unwrap();
-    let guild_id = guild.id;
-
-    let manager = songbird::get(ctx).await
-        .expect("Songbird Voice client placed in at initialisation.").clone();
-
-    let handler_lock = match manager.get(guild_id) {
-        Some(handler) => handler,
-        None => {
-            check_msg(msg.reply(ctx, "Not in a voice channel 🥺").await);
-
-            return Ok(());
-        }
-    };
-
-    let mut handler = handler_lock.lock().await;
-
-    if handler.is_deaf() {
-        check_msg(msg.channel_id.say(&ctx.http, "I'm already deafened 😂").await);
-    } else {
-        if let Err(e) = handler.deafen(true).await {
-            check_msg(msg.channel_id.say(&ctx.http, format!("Failed: {:?}", e)).await);
-        }
-
-        check_msg(msg.channel_id.say(&ctx.http, "Deafened 😞").await);
-    }
-
-    Ok(())
 }
 
 #[command]
@@ -152,39 +105,6 @@ async fn leave(ctx: &Context, msg: &Message) -> CommandResult {
         check_msg(msg.channel_id.say(&ctx.http, "Left voice channel 👋").await);
     } else {
         check_msg(msg.reply(ctx, "Not in a voice channel 🥺").await);
-    }
-
-    Ok(())
-}
-
-#[command]
-#[only_in(guilds)]
-async fn mute(ctx: &Context, msg: &Message) -> CommandResult {
-    let guild = msg.guild(&ctx.cache).await.unwrap();
-    let guild_id = guild.id;
-
-    let manager = songbird::get(ctx).await
-        .expect("Songbird Voice client placed in at initialisation.").clone();
-
-    let handler_lock = match manager.get(guild_id) {
-        Some(handler) => handler,
-        None => {
-            check_msg(msg.reply(ctx, "Not in a voice channel 🥺").await);
-
-            return Ok(());
-        }
-    };
-
-    let mut handler = handler_lock.lock().await;
-
-    if handler.is_mute() {
-        check_msg(msg.channel_id.say(&ctx.http, "I'm already muted 😂").await);
-    } else {
-        if let Err(e) = handler.mute(true).await {
-            check_msg(msg.channel_id.say(&ctx.http, format!("Failed: {:?}", e)).await);
-        }
-
-        check_msg(msg.channel_id.say(&ctx.http, "I am now muted 😞").await);
     }
 
     Ok(())
@@ -242,76 +162,11 @@ async fn play(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
             msg_title = "song";
         }
 
-        check_msg(msg.channel_id.say(&ctx.http, "Playing ".to_owned() + msg_title).await);
-        handler.play_source(source);
-    } else {
-        check_msg(msg.channel_id.say(&ctx.http, "Not in a voice channel to play in 🥺").await);
-    }
-
-    Ok(())
-}
-
-#[command]
-#[only_in(guilds)]
-async fn stop(ctx: &Context, msg: &Message) -> CommandResult {
-    let guild = msg.guild(&ctx.cache).await.unwrap();
-    let guild_id = guild.id;
-
-    let manager = songbird::get(ctx).await
-        .expect("Songbird Voice client placed in at initialisation.").clone();
-
-    if let Some(handler_lock) = manager.get(guild_id) {
-        let mut handler = handler_lock.lock().await;
-
-        handler.stop();
+        check_msg(msg.channel_id.say(&ctx.http, "Added ".to_owned() + msg_title + " to the queue").await);
+        handler.enqueue_source(source);
+        // handler.play_source(source);
     } else {
         check_msg(msg.channel_id.say(&ctx.http, "Not in a voice channel 🥺").await);
-    }
-
-    Ok(())
-}
-
-#[command]
-#[only_in(guilds)]
-async fn undeafen(ctx: &Context, msg: &Message) -> CommandResult {
-    let guild = msg.guild(&ctx.cache).await.unwrap();
-    let guild_id = guild.id;
-
-    let manager = songbird::get(ctx).await
-        .expect("Songbird Voice client placed in at initialisation.").clone();
-
-    if let Some(handler_lock) = manager.get(guild_id) {
-        let mut handler = handler_lock.lock().await;
-        if let Err(e) = handler.deafen(false).await {
-            check_msg(msg.channel_id.say(&ctx.http, format!("Failed: {:?}", e)).await);
-        }
-
-        check_msg(msg.channel_id.say(&ctx.http, "Undeafened").await);
-    } else {
-        check_msg(msg.channel_id.say(&ctx.http, "Not in a voice channel to undeafen in 🥺").await);
-    }
-
-    Ok(())
-}
-
-#[command]
-#[only_in(guilds)]
-async fn unmute(ctx: &Context, msg: &Message) -> CommandResult {
-    let guild = msg.guild(&ctx.cache).await.unwrap();
-    let guild_id = guild.id;
-
-    let manager = songbird::get(ctx).await
-        .expect("Songbird Voice client placed in at initialisation.").clone();
-
-    if let Some(handler_lock) = manager.get(guild_id) {
-        let mut handler = handler_lock.lock().await;
-        if let Err(e) = handler.mute(false).await {
-            check_msg(msg.channel_id.say(&ctx.http, format!("Failed: {:?}", e)).await);
-        }
-
-        check_msg(msg.channel_id.say(&ctx.http, "Unmuted").await);
-    } else {
-        check_msg(msg.channel_id.say(&ctx.http, "Not in a voice channel to unmute in 🥺").await);
     }
 
     Ok(())
@@ -325,88 +180,150 @@ struct Song {
 #[command]
 #[only_in(guilds)]
 async fn queue(context: &Context, msg: &Message) -> CommandResult {
-    let mut vec: Vec<Song> = load_current_queue().unwrap();
-    let mut str: String = "".to_string();
-    let mut i: i32 = 1;
-    for x in &vec {
+    let guild = msg.guild(&context.cache).await.unwrap();
+    let guild_id = guild.id;
+    let manager = songbird::get(context).await
+        .expect("Songbird Voice client placed in at initialisation.").clone();
 
-        str.push_str(&i.to_string());
-        str.push_str(" ");
-        str.push_str(&x.title);
-        str.push_str("\n");
-        i+=1;
+    if let Some(handler_lock) = manager.get(guild_id) {
+        let mut handler = handler_lock.lock().await;
+        if let Err(e) = handler.mute(false).await {
+            check_msg(msg.channel_id.say(&context.http, format!("Failed: {:?}", e)).await);
+        }
+
+        let mut str: String = "Queue: \n\n".to_string();
+        let mut i: i32 = 1;
+        let mut vec = handler.queue().current_queue();
+        let mut total_secs: f64 = 0.0;
+        for x in &vec {
+            str.push_str(&i.to_string());
+            str.push_str(" ");
+            str.push_str(x.metadata().title.as_ref().unwrap());
+            str.push_str(" 🕑 ");
+            total_secs += x.metadata().duration.as_ref().unwrap().as_secs() as f64;
+            str.push_str(&get_time_string(x.metadata().duration.as_ref().unwrap().as_secs() as f64));
+            str.push_str("s\n");
+            i += 1;
+        }
+        str.push_str("\nTotal time: ");
+        str.push_str(&get_time_string(total_secs));
+        check_msg(msg.channel_id.say(&context.http, &str).await);
+    } else {
+        check_msg(msg.channel_id.say(&context.http, "Not in a voice channel 🥺").await);
     }
-    check_msg(msg.channel_id.say(&context.http, "Queue: \n".to_string() + &str).await);
 
     Ok(())
 }
 
 #[command]
 #[only_in(guilds)]
-async fn save(context: &Context, msg: &Message) -> CommandResult {
-    let mut vec: Vec<Song> = load_current_queue().unwrap();
-    save_saved_queue(vec);
-    check_msg(msg.channel_id.say(&context.http, "Queue saved".to_string()).await);
+async fn save(context: &Context, msg: &Message, mut args: Args) -> CommandResult {
+    let name = match args.single::<String>() {
+        Ok(name) => name,
+        Err(_) => {
+            check_msg(msg.channel_id.say(&context.http, "Must provide a name").await);
+
+            return Ok(());
+        }
+    };
+
+    if !check_queue_name(&name) {
+        check_msg(msg.channel_id.say(&context.http, "Must provide a valid name [a-z]").await);
+
+        return Ok(());
+    }
+
+    let guild = msg.guild(&context.cache).await.unwrap();
+    let guild_id = guild.id;
+    let manager = songbird::get(context).await
+        .expect("Songbird Voice client placed in at initialisation.").clone();
+
+    if let Some(handler_lock) = manager.get(guild_id) {
+        let mut handler = handler_lock.lock().await;
+        if let Err(e) = handler.mute(false).await {
+            check_msg(msg.channel_id.say(&context.http, format!("Failed: {:?}", e)).await);
+        }
+        save_queue(name, handler.queue().current_queue());
+        check_msg(msg.channel_id.say(&context.http, "Queue saved".to_string()).await);
+    } else {
+        check_msg(msg.channel_id.say(&context.http, "Not in a voice channel 🥺").await);
+    }
 
     Ok(())
 }
 
 #[command]
 #[only_in(guilds)]
-async fn load(context: &Context, msg: &Message) -> CommandResult {
-    let mut vec: Vec<Song> = load_saved_queue().unwrap();
-    save_current_queue(vec);
-    check_msg(msg.channel_id.say(&context.http, "Queue loaded".to_string()).await);
+async fn load(context: &Context, msg: &Message, mut args: Args) -> CommandResult {
+    let name = match args.single::<String>() {
+        Ok(name) => name,
+        Err(_) => {
+            check_msg(msg.channel_id.say(&context.http, "Must provide a name").await);
+
+            return Ok(());
+        }
+    };
+
+    if !check_queue_name(&name) {
+        check_msg(msg.channel_id.say(&context.http, "Must provide a valid name [a-z]").await);
+
+        return Ok(());
+    }
+    let guild = msg.guild(&context.cache).await.unwrap();
+    let guild_id = guild.id;
+    let manager = songbird::get(context).await
+        .expect("Songbird Voice client placed in at initialisation.").clone();
+
+    if let Some(handler_lock) = manager.get(guild_id) {
+        let mut handler = handler_lock.lock().await;
+        if let Err(e) = handler.mute(false).await {
+            check_msg(msg.channel_id.say(&context.http, format!("Failed: {:?}", e)).await);
+        }
+        let vec = load_queue(name).unwrap_or(Vec::new());
+        for x in &vec {
+            let mut source = match songbird::ytdl(&x).await {
+                Ok(source) => source,
+                Err(why) => {
+                    println!("Err starting source: {:?}", why);
+
+                    check_msg(msg.channel_id.say(&context.http, "Error sourcing ffmpeg").await);
+
+                    return Ok(());
+                }
+            };
+            handler.enqueue_source(source);
+        }
+        check_msg(msg.channel_id.say(&context.http, "Queue loaded".to_string()).await);
+    } else {
+        check_msg(msg.channel_id.say(&context.http, "Not in a voice channel 🥺").await);
+    }
 
     Ok(())
 }
 
-fn save_saved_queue(vec: Vec<Song>) -> std::io::Result<()> {
+fn check_queue_name(name: &String) -> bool {
+    let re = Regex::new(r"^[a-z]*$").unwrap();
+    re.is_match(name.as_ref())
+}
+
+fn save_queue(name: String, vec: Vec<TrackHandle>) -> std::io::Result<()> {
     let mut write_string: String = "".to_string();
     for x in &vec {
-        write_string.push_str(&x.url);
-        write_string.push_str("_");
-        write_string.push_str(&x.title);
+        write_string.push_str(&x.metadata().source_url.as_ref().unwrap());
         write_string.push_str("\n");
     }
-    let mut file = File::create("saved_queue")?;
+    let mut file = File::create(name + ".list")?;
     file.write_all(write_string.as_bytes())?;
     Ok(())
 }
 
-fn save_current_queue(vec: Vec<Song>) -> std::io::Result<()> {
-    let mut write_string: String = "".to_string();
-    for x in &vec {
-        write_string.push_str(&x.url);
-        write_string.push_str("_");
-        write_string.push_str(&x.title);
-        write_string.push_str("\n");
-    }
-    let mut file = File::create("current_queue")?;
-    file.write_all(write_string.as_bytes())?;
-    Ok(())
-}
-
-fn load_current_queue() -> std::io::Result<(Vec<Song>)>  {
-    let mut vec: Vec<Song> = Vec::new();
-    let file = File::open("current_queue")?;
+fn load_queue(name: String) -> std::io::Result<(Vec<String>)> {
+    let mut vec: Vec<String> = Vec::new();
+    let file = File::open(name + ".list")?;
     let reader = BufReader::new(file);
 
     for line in reader.lines() {
-        let (url, title) = split_once(line.unwrap());
-        vec.push(Song { url, title });
-    }
-    Ok(vec)
-}
-
-fn load_saved_queue() -> std::io::Result<(Vec<Song>)> {
-    let mut vec: Vec<Song> = Vec::new();
-    let file = File::open("saved_queue")?;
-    let reader = BufReader::new(file);
-
-    for line in reader.lines() {
-        let (url, title) = split_once(line.unwrap());
-        vec.push(Song { url, title });
+        vec.push(line.unwrap());
     }
     Ok(vec)
 }
@@ -417,9 +334,18 @@ fn check_msg(result: SerenityResult<Message>) {
     }
 }
 
-fn split_once(in_string: String) -> (String, String) {
-    let mut splitter = in_string.splitn(2, '_');
-    let first = splitter.next().unwrap();
-    let second = splitter.next().unwrap();
-    (first.parse().unwrap(), second.parse().unwrap())
+fn get_time_string(mut secs: f64) -> String {
+    let mut str: String = "".to_string();
+    let hours = (secs / 3600.0).floor();
+    secs = secs - (hours * 3600.0);
+    let minutes = (secs / 60.0).floor();
+    secs = secs - (minutes * 60.0);
+    if hours > 0.0 {
+        str.push_str(hours.to_string().as_str());
+        str.push_str(":");
+    }
+    str.push_str(minutes.to_string().as_str());
+    str.push_str(":");
+    str.push_str(secs.to_string().as_str());
+    return str;
 }
