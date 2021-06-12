@@ -210,8 +210,8 @@ async fn help(ctx: &Context, msg: &Message) -> CommandResult {
     help_map.insert("leave".to_string(), "Make the bot leave your voice channel.".to_string());
     help_map.insert("play URL".to_string(), "Add a track to the queue.".to_string());
     help_map.insert("queue".to_string(), "Show all tracks in the queue.".to_string());
-    help_map.insert("save NAME".to_string(), "Save the current queue with a name.".to_string());
-    help_map.insert("load NAME".to_string(), "Load the queue with the provided name.".to_string());
+    help_map.insert("save NAME".to_string(), "Save the current queue with a name [a-z].".to_string());
+    help_map.insert("load NAME".to_string(), "Load the queue with the provided name [a-z].".to_string());
     help_map.insert("pause".to_string(), "Pause playback.".to_string());
     help_map.insert("resume".to_string(), "Resume playback.".to_string());
     help_map.insert("skip".to_string(), "Skip the current track.".to_string());
