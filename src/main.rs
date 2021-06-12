@@ -28,6 +28,15 @@ use regex::Regex;
 
 struct Handler;
 
+const NOT_IN_VOICE_CHANNEL: &str = "Not in a voice channel 🥺";
+const LEFT_VOICE_CHANNEL: &str = "Left voice channel 👋";
+const SONGBIRD_INITIALISATION: &str = "Songbird Voice client placed in at initialisation.";
+const MUST_PROVIDE_URL: &str = "Must provide a URL to a video or audio";
+const MUST_PROVIDE_VALID_URL: &str = "Must provide a valid URL";
+const ERROR_SOURCING_FFMPEG: &str = "Error sourcing ffmpeg";
+const MUST_PROVIDE_NAME: &str = "Must provide a name";
+const MUST_PROVIDE_VALID_NAME: &str = "Must provide a valid name [a-z]";
+
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, _: Context, ready: Ready) {
@@ -36,7 +45,7 @@ impl EventHandler for Handler {
 }
 
 #[group]
-#[commands(join, leave, play, ping, queue, save, load)]
+#[commands(join, leave, play, ping, queue, save, load, skip)]
 struct General;
 
 #[tokio::main]
@@ -73,14 +82,14 @@ async fn join(ctx: &Context, msg: &Message) -> CommandResult {
     let connect_to = match channel_id {
         Some(channel) => channel,
         None => {
-            check_msg(msg.reply(ctx, "Not in a voice channel 🥺").await);
+            check_msg(msg.reply(ctx, NOT_IN_VOICE_CHANNEL).await);
 
             return Ok(());
         }
     };
 
     let manager = songbird::get(ctx).await
-        .expect("Songbird Voice client placed in at initialisation.").clone();
+        .expect(SONGBIRD_INITIALISATION).clone();
 
     let _handler = manager.join(guild_id, connect_to).await;
 
@@ -94,7 +103,7 @@ async fn leave(ctx: &Context, msg: &Message) -> CommandResult {
     let guild_id = guild.id;
 
     let manager = songbird::get(ctx).await
-        .expect("Songbird Voice client placed in at initialisation.").clone();
+        .expect(SONGBIRD_INITIALISATION).clone();
     let has_handler = manager.get(guild_id).is_some();
 
     if has_handler {
@@ -102,9 +111,9 @@ async fn leave(ctx: &Context, msg: &Message) -> CommandResult {
             check_msg(msg.channel_id.say(&ctx.http, format!("Failed: {:?}", e)).await);
         }
 
-        check_msg(msg.channel_id.say(&ctx.http, "Left voice channel 👋").await);
+        check_msg(msg.channel_id.say(&ctx.http, LEFT_VOICE_CHANNEL).await);
     } else {
-        check_msg(msg.reply(ctx, "Not in a voice channel 🥺").await);
+        check_msg(msg.reply(ctx, NOT_IN_VOICE_CHANNEL).await);
     }
 
     Ok(())
@@ -123,14 +132,14 @@ async fn play(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
     let url = match args.single::<String>() {
         Ok(url) => url,
         Err(_) => {
-            check_msg(msg.channel_id.say(&ctx.http, "Must provide a URL to a video or audio").await);
+            check_msg(msg.channel_id.say(&ctx.http, MUST_PROVIDE_URL).await);
 
             return Ok(());
         }
     };
 
     if !url.starts_with("http") {
-        check_msg(msg.channel_id.say(&ctx.http, "Must provide a valid URL").await);
+        check_msg(msg.channel_id.say(&ctx.http, MUST_PROVIDE_VALID_URL).await);
 
         return Ok(());
     }
@@ -139,7 +148,7 @@ async fn play(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
     let guild_id = guild.id;
 
     let manager = songbird::get(ctx).await
-        .expect("Songbird Voice client placed in at initialisation.").clone();
+        .expect(SONGBIRD_INITIALISATION).clone();
 
     if let Some(handler_lock) = manager.get(guild_id) {
         let mut handler = handler_lock.lock().await;
@@ -149,7 +158,7 @@ async fn play(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
             Err(why) => {
                 println!("Err starting source: {:?}", why);
 
-                check_msg(msg.channel_id.say(&ctx.http, "Error sourcing ffmpeg").await);
+                check_msg(msg.channel_id.say(&ctx.http, ERROR_SOURCING_FFMPEG).await);
 
                 return Ok(());
             }
@@ -166,7 +175,7 @@ async fn play(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
         handler.enqueue_source(source);
         // handler.play_source(source);
     } else {
-        check_msg(msg.channel_id.say(&ctx.http, "Not in a voice channel 🥺").await);
+        check_msg(msg.channel_id.say(&ctx.http, NOT_IN_VOICE_CHANNEL).await);
     }
 
     Ok(())
@@ -183,7 +192,7 @@ async fn queue(context: &Context, msg: &Message) -> CommandResult {
     let guild = msg.guild(&context.cache).await.unwrap();
     let guild_id = guild.id;
     let manager = songbird::get(context).await
-        .expect("Songbird Voice client placed in at initialisation.").clone();
+        .expect(SONGBIRD_INITIALISATION).clone();
 
     if let Some(handler_lock) = manager.get(guild_id) {
         let mut handler = handler_lock.lock().await;
@@ -191,25 +200,33 @@ async fn queue(context: &Context, msg: &Message) -> CommandResult {
             check_msg(msg.channel_id.say(&context.http, format!("Failed: {:?}", e)).await);
         }
 
-        let mut str: String = "Queue: \n\n".to_string();
-        let mut i: i32 = 1;
+        let mut str: String = "Now playing: ".to_string();
+        let mut i: i32 = 0;
         let mut vec = handler.queue().current_queue();
         let mut total_secs: f64 = 0.0;
         for x in &vec {
-            str.push_str(&i.to_string());
-            str.push_str(" ");
-            str.push_str(x.metadata().title.as_ref().unwrap());
-            str.push_str(" 🕑 ");
+            if i!=0 {
+                str.push_str(&i.to_string());
+                str.push_str(" ");
+                str.push_str(x.metadata().title.as_ref().unwrap());
+                str.push_str(" 🕑 ");
+                str.push_str(&get_time_string(x.metadata().duration.as_ref().unwrap().as_secs() as f64));
+                str.push_str("s\n");
+            }else{
+                str.push_str(x.metadata().title.as_ref().unwrap());
+                str.push_str(" 🕑 ");
+                str.push_str(&get_time_string(x.metadata().duration.as_ref().unwrap().as_secs() as f64));
+                str.push_str("s\n");
+                str.push_str("\nQueue: \n");
+            }
             total_secs += x.metadata().duration.as_ref().unwrap().as_secs() as f64;
-            str.push_str(&get_time_string(x.metadata().duration.as_ref().unwrap().as_secs() as f64));
-            str.push_str("s\n");
             i += 1;
         }
         str.push_str("\nTotal time: ");
         str.push_str(&get_time_string(total_secs));
         check_msg(msg.channel_id.say(&context.http, &str).await);
     } else {
-        check_msg(msg.channel_id.say(&context.http, "Not in a voice channel 🥺").await);
+        check_msg(msg.channel_id.say(&context.http, NOT_IN_VOICE_CHANNEL).await);
     }
 
     Ok(())
@@ -221,14 +238,14 @@ async fn save(context: &Context, msg: &Message, mut args: Args) -> CommandResult
     let name = match args.single::<String>() {
         Ok(name) => name,
         Err(_) => {
-            check_msg(msg.channel_id.say(&context.http, "Must provide a name").await);
+            check_msg(msg.channel_id.say(&context.http, MUST_PROVIDE_NAME).await);
 
             return Ok(());
         }
     };
 
     if !check_queue_name(&name) {
-        check_msg(msg.channel_id.say(&context.http, "Must provide a valid name [a-z]").await);
+        check_msg(msg.channel_id.say(&context.http, MUST_PROVIDE_VALID_NAME).await);
 
         return Ok(());
     }
@@ -236,7 +253,7 @@ async fn save(context: &Context, msg: &Message, mut args: Args) -> CommandResult
     let guild = msg.guild(&context.cache).await.unwrap();
     let guild_id = guild.id;
     let manager = songbird::get(context).await
-        .expect("Songbird Voice client placed in at initialisation.").clone();
+        .expect(SONGBIRD_INITIALISATION).clone();
 
     if let Some(handler_lock) = manager.get(guild_id) {
         let mut handler = handler_lock.lock().await;
@@ -246,7 +263,7 @@ async fn save(context: &Context, msg: &Message, mut args: Args) -> CommandResult
         save_queue(name, handler.queue().current_queue());
         check_msg(msg.channel_id.say(&context.http, "Queue saved".to_string()).await);
     } else {
-        check_msg(msg.channel_id.say(&context.http, "Not in a voice channel 🥺").await);
+        check_msg(msg.channel_id.say(&context.http, NOT_IN_VOICE_CHANNEL).await);
     }
 
     Ok(())
@@ -258,21 +275,21 @@ async fn load(context: &Context, msg: &Message, mut args: Args) -> CommandResult
     let name = match args.single::<String>() {
         Ok(name) => name,
         Err(_) => {
-            check_msg(msg.channel_id.say(&context.http, "Must provide a name").await);
+            check_msg(msg.channel_id.say(&context.http, MUST_PROVIDE_NAME).await);
 
             return Ok(());
         }
     };
 
     if !check_queue_name(&name) {
-        check_msg(msg.channel_id.say(&context.http, "Must provide a valid name [a-z]").await);
+        check_msg(msg.channel_id.say(&context.http, MUST_PROVIDE_VALID_NAME).await);
 
         return Ok(());
     }
     let guild = msg.guild(&context.cache).await.unwrap();
     let guild_id = guild.id;
     let manager = songbird::get(context).await
-        .expect("Songbird Voice client placed in at initialisation.").clone();
+        .expect(SONGBIRD_INITIALISATION).clone();
 
     if let Some(handler_lock) = manager.get(guild_id) {
         let mut handler = handler_lock.lock().await;
@@ -286,7 +303,7 @@ async fn load(context: &Context, msg: &Message, mut args: Args) -> CommandResult
                 Err(why) => {
                     println!("Err starting source: {:?}", why);
 
-                    check_msg(msg.channel_id.say(&context.http, "Error sourcing ffmpeg").await);
+                    check_msg(msg.channel_id.say(&context.http, ERROR_SOURCING_FFMPEG).await);
 
                     return Ok(());
                 }
@@ -295,7 +312,7 @@ async fn load(context: &Context, msg: &Message, mut args: Args) -> CommandResult
         }
         check_msg(msg.channel_id.say(&context.http, "Queue loaded".to_string()).await);
     } else {
-        check_msg(msg.channel_id.say(&context.http, "Not in a voice channel 🥺").await);
+        check_msg(msg.channel_id.say(&context.http, NOT_IN_VOICE_CHANNEL).await);
     }
 
     Ok(())
