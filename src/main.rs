@@ -19,14 +19,15 @@ use serenity::{
     model::{channel::Message, gateway::Ready},
     Result as SerenityResult,
 };
-use songbird::input::Input;
-use serenity::static_assertions::_core::borrow::BorrowMut;
 use std::fs::File;
 use std::io::{Write, BufReader, BufRead};
-use songbird::tracks::{TrackQueue, TrackHandle};
+use songbird::tracks::{TrackHandle};
 use regex::Regex;
+use std::collections::HashMap;
 
 struct Handler;
+
+const COMMAND_PREFIX: &str = "~";
 
 const NOT_IN_VOICE_CHANNEL: &str = "Not in a voice channel 🥺";
 const LEFT_VOICE_CHANNEL: &str = "Left voice channel 👋";
@@ -45,7 +46,7 @@ impl EventHandler for Handler {
 }
 
 #[group]
-#[commands(join, leave, play, ping, queue, save, load, skip)]
+#[commands(join, leave, play, ping, queue, save, load, pause, resume, skip, clear, help)]
 struct General;
 
 #[tokio::main]
@@ -56,7 +57,7 @@ async fn main() {
 
     let framework = StandardFramework::new()
         .configure(|c| c
-            .prefix("~"))
+            .prefix(COMMAND_PREFIX))
         .group(&GENERAL_GROUP);
 
     let mut client = Client::builder(&token)
@@ -153,7 +154,7 @@ async fn play(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
     if let Some(handler_lock) = manager.get(guild_id) {
         let mut handler = handler_lock.lock().await;
 
-        let mut source = match songbird::ytdl(&url).await {
+        let source = match songbird::ytdl(&url).await {
             Ok(source) => source,
             Err(why) => {
                 println!("Err starting source: {:?}", why);
@@ -165,7 +166,7 @@ async fn play(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
         };
         let msg_title: &str;
         {
-            let mut sd = source.borrow_mut();
+            // let mut sd = source.borrow_mut();
             // msg_title = sd.metadata.title.as_deref().unwrap_or("song");
             //@TODO get song name when Songbird gets updated to next version
             msg_title = "song";
@@ -181,9 +182,93 @@ async fn play(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
     Ok(())
 }
 
-struct Song {
-    url: String,
-    title: String,
+#[command]
+#[only_in(guilds)]
+async fn skip(ctx: &Context, msg: &Message) -> CommandResult {
+    let guild = msg.guild(&ctx.cache).await.unwrap();
+    let guild_id = guild.id;
+
+    let manager = songbird::get(ctx).await
+        .expect(SONGBIRD_INITIALISATION).clone();
+
+    if let Some(handler_lock) = manager.get(guild_id) {
+        let handler = handler_lock.lock().await;
+        check_msg(msg.channel_id.say(&ctx.http, "Skipping song").await);
+        handler.queue().skip().expect("Could not skip");
+    } else {
+        check_msg(msg.channel_id.say(&ctx.http, NOT_IN_VOICE_CHANNEL).await);
+    }
+
+    Ok(())
+}
+
+#[command]
+#[only_in(guilds)]
+async fn help(ctx: &Context, msg: &Message) -> CommandResult {
+    let mut help_map = HashMap::new();
+    help_map.insert("join".to_string(), "Make the bot join your voice channel.".to_string());
+    help_map.insert("leave".to_string(), "Make the bot leave your voice channel.".to_string());
+    help_map.insert("play URL".to_string(), "Add a track to the queue.".to_string());
+    help_map.insert("queue".to_string(), "Show all tracks in the queue.".to_string());
+    help_map.insert("save NAME".to_string(), "Save the current queue with a name.".to_string());
+    help_map.insert("load NAME".to_string(), "Load the queue with the provided name.".to_string());
+    help_map.insert("pause".to_string(), "Pause playback.".to_string());
+    help_map.insert("resume".to_string(), "Resume playback.".to_string());
+    help_map.insert("skip".to_string(), "Skip the current track.".to_string());
+    help_map.insert("clear".to_string(), "Clear the current queue.".to_string());
+    help_map.insert("help".to_string(), "Display all possible commands.".to_string());
+
+    let mut str: String = "Possible commands: ".to_string();
+    for (command, description) in &help_map {
+        str.push_str("\n");
+        str.push_str(COMMAND_PREFIX);
+        str.push_str(command);
+        str.push_str(": ");
+        str.push_str(description);
+    }
+    check_msg(msg.channel_id.say(&ctx.http, str).await);
+
+    Ok(())
+}
+
+#[command]
+#[only_in(guilds)]
+async fn pause(ctx: &Context, msg: &Message) -> CommandResult {
+    let guild = msg.guild(&ctx.cache).await.unwrap();
+    let guild_id = guild.id;
+
+    let manager = songbird::get(ctx).await
+        .expect(SONGBIRD_INITIALISATION).clone();
+
+    if let Some(handler_lock) = manager.get(guild_id) {
+        let handler = handler_lock.lock().await;
+        handler.queue().current().unwrap().pause().expect("Could not pause");
+        check_msg(msg.channel_id.say(&ctx.http, "Pausing").await);
+    } else {
+        check_msg(msg.channel_id.say(&ctx.http, NOT_IN_VOICE_CHANNEL).await);
+    }
+
+    Ok(())
+}
+
+#[command]
+#[only_in(guilds)]
+async fn resume(ctx: &Context, msg: &Message) -> CommandResult {
+    let guild = msg.guild(&ctx.cache).await.unwrap();
+    let guild_id = guild.id;
+
+    let manager = songbird::get(ctx).await
+        .expect(SONGBIRD_INITIALISATION).clone();
+
+    if let Some(handler_lock) = manager.get(guild_id) {
+        let handler = handler_lock.lock().await;
+        handler.queue().current().unwrap().play().expect("Could not play");
+        check_msg(msg.channel_id.say(&ctx.http, "Resuming").await);
+    } else {
+        check_msg(msg.channel_id.say(&ctx.http, NOT_IN_VOICE_CHANNEL).await);
+    }
+
+    Ok(())
 }
 
 #[command]
@@ -202,17 +287,17 @@ async fn queue(context: &Context, msg: &Message) -> CommandResult {
 
         let mut str: String = "Now playing: ".to_string();
         let mut i: i32 = 0;
-        let mut vec = handler.queue().current_queue();
+        let vec = handler.queue().current_queue();
         let mut total_secs: f64 = 0.0;
         for x in &vec {
-            if i!=0 {
+            if i != 0 {
                 str.push_str(&i.to_string());
                 str.push_str(" ");
                 str.push_str(x.metadata().title.as_ref().unwrap());
                 str.push_str(" 🕑 ");
                 str.push_str(&get_time_string(x.metadata().duration.as_ref().unwrap().as_secs() as f64));
                 str.push_str("s\n");
-            }else{
+            } else {
                 str.push_str(x.metadata().title.as_ref().unwrap());
                 str.push_str(" 🕑 ");
                 str.push_str(&get_time_string(x.metadata().duration.as_ref().unwrap().as_secs() as f64));
@@ -225,6 +310,29 @@ async fn queue(context: &Context, msg: &Message) -> CommandResult {
         str.push_str("\nTotal time: ");
         str.push_str(&get_time_string(total_secs));
         check_msg(msg.channel_id.say(&context.http, &str).await);
+    } else {
+        check_msg(msg.channel_id.say(&context.http, NOT_IN_VOICE_CHANNEL).await);
+    }
+
+    Ok(())
+}
+
+#[command]
+#[only_in(guilds)]
+async fn clear(context: &Context, msg: &Message) -> CommandResult {
+    let guild = msg.guild(&context.cache).await.unwrap();
+    let guild_id = guild.id;
+    let manager = songbird::get(context).await
+        .expect(SONGBIRD_INITIALISATION).clone();
+
+    if let Some(handler_lock) = manager.get(guild_id) {
+        let mut handler = handler_lock.lock().await;
+        if let Err(e) = handler.mute(false).await {
+            check_msg(msg.channel_id.say(&context.http, format!("Failed: {:?}", e)).await);
+        }
+
+        handler.queue().stop();
+        check_msg(msg.channel_id.say(&context.http, "Queue cleared").await);
     } else {
         check_msg(msg.channel_id.say(&context.http, NOT_IN_VOICE_CHANNEL).await);
     }
@@ -260,7 +368,7 @@ async fn save(context: &Context, msg: &Message, mut args: Args) -> CommandResult
         if let Err(e) = handler.mute(false).await {
             check_msg(msg.channel_id.say(&context.http, format!("Failed: {:?}", e)).await);
         }
-        save_queue(name, handler.queue().current_queue());
+        save_queue(name, handler.queue().current_queue()).expect("Could not save queue");
         check_msg(msg.channel_id.say(&context.http, "Queue saved".to_string()).await);
     } else {
         check_msg(msg.channel_id.say(&context.http, NOT_IN_VOICE_CHANNEL).await);
@@ -296,9 +404,10 @@ async fn load(context: &Context, msg: &Message, mut args: Args) -> CommandResult
         if let Err(e) = handler.mute(false).await {
             check_msg(msg.channel_id.say(&context.http, format!("Failed: {:?}", e)).await);
         }
+        check_msg(msg.channel_id.say(&context.http, "Loading queue".to_string()).await);
         let vec = load_queue(name).unwrap_or(Vec::new());
         for x in &vec {
-            let mut source = match songbird::ytdl(&x).await {
+            let source = match songbird::ytdl(&x).await {
                 Ok(source) => source,
                 Err(why) => {
                     println!("Err starting source: {:?}", why);
@@ -334,7 +443,7 @@ fn save_queue(name: String, vec: Vec<TrackHandle>) -> std::io::Result<()> {
     Ok(())
 }
 
-fn load_queue(name: String) -> std::io::Result<(Vec<String>)> {
+fn load_queue(name: String) -> std::io::Result<Vec<String>> {
     let mut vec: Vec<String> = Vec::new();
     let file = File::open(name + ".list")?;
     let reader = BufReader::new(file);
